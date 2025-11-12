@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ArtCenter — Pixel Paths</title>
+<style>
+  html,body{margin:0;height:100%;background:#fff;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;image-rendering: pixelated;touch-action:none}
+  @font-face{font-family:"PixelSys";src:local("Menlo"),local("Courier New"),local("Consolas")}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+(() => {
+  // ===== Canvas =====
+  const cvs = document.getElementById('cv');
+  const ctx = cvs.getContext('2d');
+  let W=0,H=0,DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+  function resize(){W=Math.max(640,innerWidth|0);H=Math.max(420,innerHeight|0);
+    cvs.width=(W*DPR)|0;cvs.height=(H*DPR)|0;ctx.setTransform(DPR,0,0,DPR,0,0);ctx.imageSmoothingEnabled=false;}
+  addEventListener('resize',resize);resize();
+
+  // ===== Helpers =====
+  function fill(c){ctx.fillStyle=c;}
+  function rect(x,y,w,h,c){if(c)fill(c);ctx.fillRect(x|0,y|0,w|0,h|0);}
+  function outline(x,y,w,h,c,sw=1){ctx.strokeStyle=c;ctx.lineWidth=sw;ctx.strokeRect(x|0,y|0,w|0,h|0);}
+  function circle(x,y,r,c){if(c)fill(c);ctx.beginPath();ctx.arc(x|0,y|0,r|0,0,Math.PI*2);ctx.fill();}
+  function text(t,x,y,s=12,c="#000",a="center"){ctx.font=`bold ${s|0}px PixelSys, monospace`;ctx.textAlign=a;ctx.textBaseline="top";fill(c);ctx.fillText(t,x|0,y|0);}
+  function inRect(mx,my,x,y,w,h){return mx>=x&&my>=y&&mx<=x+w&&my<=y+h;}
+  function starAt(x,y,r1,r2,points,col){
+    fill(col); ctx.beginPath();
+    for(let i=0;i<points*2;i++){const ang=i*Math.PI/points;const r=i%2?r2:r1;ctx.lineTo(x+Math.cos(ang)*r,y+Math.sin(ang)*r);}
+    ctx.closePath(); ctx.fill();
+  }
+
+  // ===== Mouse =====
+  const mouse={x:-9999,y:-9999,down:false,clicked:false};
+  cvs.addEventListener('mousemove',e=>{mouse.x=e.offsetX;mouse.y=e.offsetY;});
+  cvs.addEventListener('mouseleave',()=>{mouse.x=-9999;mouse.y=-9999;});
+  cvs.addEventListener('mousedown',()=>{mouse.down=true;});
+  addEventListener('mouseup',()=>{mouse.down=false;});
+  cvs.addEventListener('click',()=>{mouse.clicked=true;});
+
+  // ===== State =====
+  let scene=1;
+  let doorOpen=0,doorOpening=false,whiteFade=0;
+
+  const options=["Sleep","Social","Study"];
+  const selected=new Set(); let confirmEnabled=false;
+
+  // Tickers (top + bottom for Sleep+Study)
+  const baseItems=[
+    {label:"Google",color:"#34a853"},
+    {label:"Tesla",color:"#cc0000"},
+    {label:"Meta",color:"#1877f2"},
+    {label:"Apple",color:"#111111"},
+    {label:"NVIDIA",color:"#76b900"},
+    {label:"Amazon",color:"#ff9900"},
+    {label:"Microsoft",color:"#737373"},
+  ];
+  const TICKER_ROW_H=48;
+  const tickersTop=[
+    {x:0,speed:1.25,items:baseItems},
+    {x:0,speed:1.6, items:[...baseItems].reverse()},
+    {x:0,speed:1.4, items:[...baseItems]},
+  ];
+  const tickersBottom=[
+    {x:0,speed:1.3, items:[...baseItems].reverse()},
+    {x:0,speed:1.55,items:[...baseItems]},
+  ];
+
+  let bobT=0, billY=10;
+
+  // ===== Scene 1 =====
+  function tryOpenDoor(mx,my){
+    const gateW=Math.min(W*0.6,520),gateH=Math.min(H*0.55,360);
+    const gx=(W-gateW)/2, gy=H-gateH-60;
+    if(inRect(mx,my,gx,gy,gateW,gateH)&&!doorOpening) doorOpening=true;
+  }
+
+  function drawScene1(dt){
+    rect(0,0,W,H,"#f2f6ff"); rect(0,H-40,W,40,"#e6e6e6");
+    const logoR=Math.min(100,W*0.08),logoY=90;
+    circle(W/2,logoY,logoR,"#da5634"); text("ArtCenter",W/2,logoY+logoR+12,28,"#111");
+
+    const gateW=Math.min(W*0.6,520),gateH=Math.min(H*0.55,360);
+    const gx=(W-gateW)/2, gy=H-gateH-60;
+    rect(gx,gy,gateW,gateH,"#c7d0e8"); outline(gx,gy,gateW,gateH,"#8fa3d1",4);
+    const inner={x:gx+16,y:gy+16,w:gateW-32,h:gateH-32};
+    rect(inner.x,inner.y,inner.w,inner.h,"#edf2ff"); outline(inner.x,inner.y,inner.w,inner.h,"#b0c0e6",2);
+    const gap=6, half=(inner.w-gap)/2, openPx=Math.floor(half*doorOpen);
+    rect(inner.x-openPx,inner.y,half,inner.h,"#b9c9ef");
+    rect(inner.x+half+gap+openPx,inner.y,half,inner.h,"#b9c9ef");
+    rect(inner.x+half-10-openPx,inner.y+inner.h/2-15,8,30,"#7b8db8");
+    rect(inner.x+half+gap+2+openPx,inner.y+inner.h/2-15,8,30,"#7b8db8");
+
+    const sx=W/2, sy=gy+gateH-20;
+    rect(sx-18,sy-30,12,30,"#333"); rect(sx+6,sy-30,12,30,"#333");
+    rect(sx-22,sy-72,44,44,"#222a48");
+    rect(sx-32,sy-62,10,22,"#222a48"); rect(sx+22,sy-62,10,22,"#222a48");
+    rect(sx-18,sy-102,36,30,"#f2c5a0"); rect(sx-10,sy-92,6,6,"#111"); rect(sx+4,sy-92,6,6,"#111");
+
+    const hover=inRect(mouse.x,mouse.y,gx,gy,gateW,gateH);
+    if(mouse.clicked&&hover) tryOpenDoor(mouse.x,mouse.y);
+
+    if(doorOpening&&doorOpen<1){doorOpen=Math.min(1,doorOpen+dt*0.0016); if(doorOpen>=1) whiteFade=0.001;}
+    if(whiteFade>0){whiteFade=Math.min(1,whiteFade+dt*0.003); rect(0,0,W,H,`rgba(255,255,255,${whiteFade.toFixed(3)})`);
+      if(whiteFade>=1){selected.clear();confirmEnabled=false;scene=2;}}
+  }
+
+  // ===== Scene 2 =====
+  const choiceBoxes=[]; let confirmBox=null;
+  function drawScene2(){
+    rect(0,0,W,H,"#ffffff");
+    const bw=Math.min(740,W-60),bh=150,bx=(W-bw)/2,by=60;
+    rect(bx,by,bw,bh,"#f7f7ff"); outline(bx,by,bw,bh,"#111",3);
+    text("Welcome to your ACCD college life.",bx+bw/2,by+16,22,"#111");
+    text("What kind of path will you choose?",bx+bw/2,by+48,18,"#333");
+    text("(Please select two options)",bx+bw/2,by+78,14,"#777");
+
+    const ow=180,oh=64,ox=(W-(ow*3+40*2))/2,oy=by+bh+40; choiceBoxes.length=0;
+    for(let i=0;i<3;i++){
+      const x=ox+i*(ow+40), y=oy, label=options[i], on=selected.has(label);
+      rect(x,y,ow,oh,on?"#ffe9a6":"#f1f1f1"); outline(x,y,ow,oh,on?"#cc9a00":"#111",3);
+      text(label,x+ow/2,y+oh/2-12,20,"#111"); text(on?"Selected":"Click to select",x+ow/2,y+oh/2+6,12,"#666");
+      choiceBoxes.push({x,y,w:ow,h:oh,label});
+    }
+
+    if(mouse.clicked){
+      for(const b of choiceBoxes){
+        if(inRect(mouse.x,mouse.y,b.x,b.y,b.w,b.h)){
+          if(selected.has(b.label)) selected.delete(b.label);
+          else { if(selected.size<2) selected.add(b.label); else {const first=[...selected][0]; selected.delete(first); selected.add(b.label);} }
+        }
+      }
+    }
+
+    confirmEnabled=(selected.size===2);
+    const cw=180,ch=56,cx=(W-cw)/2,cy=oy+oh+40;
+    rect(cx,cy,cw,ch,confirmEnabled?"#a4ffb1":"#e2e2e2"); outline(cx,cy,cw,ch,"#111",3);
+    text("Confirm",cx+cw/2,cy+ch/2-10,20,"#111");
+    text(confirmEnabled?[...selected].join(" + "):"Pick exactly two",cx+cw/2,cy+ch/2+6,12,"#333");
+    confirmBox={x:cx,y:cy,w:cw,h:ch};
+
+    if(mouse.clicked&&confirmEnabled&&inRect(mouse.x,mouse.y,cx,cy,cw,ch)){
+      const set=[...selected].sort().join("+");
+      if(set==="Sleep+Study") scene=3;
+      else if(set==="Social+Study") scene=4;
+      else if(set==="Sleep+Social") scene=5;
+    }
+  }
+
+  // ===== Scene 3: Sleep + Study (tickers top & bottom) =====
+  function drawPixelNerd(cx,cy){
+    rect(cx-30,cy-54,24,36,"#3b5aa8"); rect(cx-24,cy-60,48,60,"#1a1f33");
+    rect(cx+26,cy-46,8,30,"#1a1f33"); rect(cx+34,cy-46,8,30,"#1a1f33");
+    rect(cx-36,cy-46,10,26,"#1a1f33");
+    rect(cx-16,cy-92,32,28,"#f2c5a0");
+    rect(cx-6,cy-82,4,4,"#ff8fa3"); rect(cx+8,cy-76,4,4,"#ff8fa3");
+    rect(cx-14,cy-88,14,10,"#000"); rect(cx-12,cy-86,10,6,"#bfe8ff");
+    rect(cx+0,cy-88,14,10,"#000"); rect(cx+2,cy-86,10,6,"#bfe8ff");
+    rect(cx-1,cy-86,2,6,"#000");
+    rect(cx-6,cy-66,6,6,"#fff"); rect(cx+0,cy-66,6,6,"#fff");
+    rect(cx-18,cy-102,36,8,"#111"); rect(cx-26,cy-110,52,10,"#111");
+    rect(cx-16,cy,12,34,"#333"); rect(cx+6,cy,12,34,"#333");
+    rect(cx-64,cy+34,40,10,"#ffce54"); rect(cx-64,cy+44,44,10,"#5bc0de"); rect(cx-64,cy+54,52,10,"#ed5565");
+  }
+
+  function drawTickerRow(y,t){
+    const th=TICKER_ROW_H; rect(0,y,W,th,"#f6f6f6"); outline(0,y,W,th,"#111",2);
+    t.x-=t.speed; let x=t.x; const boxW=160;
+    while(x<W+boxW){
+      const idx=Math.floor((x-t.x)/boxW)%t.items.length; const it=t.items[idx];
+      rect(x,y+4,boxW-8,th-8,it.color); outline(x,y+4,boxW-8,th-8,"#111",2);
+      text(it.label,x+(boxW-8)/2,y+14,14,"#fff");
+      x+=boxW;
+    }
+    if(t.x<=-boxW) t.x+=boxW;
+  }
+
+  function drawScene3(dt){
+    rect(0,0,W,H,"#ffffff");
+
+    // TOP rows
+    const topRows=tickersTop.length;
+    for(let r=0;r<topRows;r++){ drawTickerRow(r*TICKER_ROW_H, tickersTop[r]); }
+
+    // BOTTOM rows
+    const bottomRows=tickersBottom.length;
+    for(let r=0;r<bottomRows;r++){
+      const y=H - (bottomRows-r)*TICKER_ROW_H;
+      drawTickerRow(y, tickersBottom[r]);
+    }
+
+    // Nerd centered
+    const cx=W/2, cy=H/2;
+    drawPixelNerd(cx,cy);
+
+    text("Path: Sleep + Study", W/2, topRows*TICKER_ROW_H + 10, 18, "#111");
+  }
+
+  // ===== Scene 4: Social + Study (joyful crowd, white bg, star decor) =====
+  function drawScene4(dt){
+    rect(0,0,W,H,"#ffffff");
+
+    // Star decorations (soft twinkle)
+    const N = 60;
+    for(let i=0;i<N;i++){
+      const x = (i*73 + (Date.now()/8|0)) % W;
+      const y = (i*37 + (Date.now()/13|0)) % H;
+      starAt(x, y, 5, 3, 2, i%3 ? "#ffd400" : "#a2c8ff");
+    }
+
+    const cx=W/2, cy=H/2-10;
+
+    // Central student (still tired-looking as contrast)
+    rect(cx-20,cy-50,40,56,"#2b2f44"); // body
+    rect(cx-16,cy-92,32,22,"#e8b899"); // head
+    rect(cx-14,cy-82,8,4,"#d09e84");  // cheeks
+    rect(cx+6, cy-82,8,4,"#d09e84");
+    rect(cx-10,cy-86,8,5,"#333");     // dark circles
+    rect(cx+2, cy-86,8,5,"#333");
+    rect(cx+60,cy-110,6,140,"#cbd3ff"); rect(cx+46,cy-110,34,6,"#cbd3ff"); // IV stand
+    rect(cx+62,cy-92+Math.sin(bobT)*2,22,28,"#9cc2ff");                     // IV bag
+    for(let i=0;i<3;i++){circle(cx+72,cy-60+((bobT*6+i*18)%60),3,"#9cc2ff");}
+    rect(cx+20,cy-36,40,8,"#2b2f44"); // arm to IV
+
+    // Energy drink cans on floor
+    for(let i=0;i<8;i++){const fx=(W*0.25)+i*(W*0.06),fy=H-60+Math.sin((bobT+i)*0.6)*2;
+      rect(fx,fy,16,28,"#1e1e1e"); rect(fx+2,fy+2,12,8,"#3f8d3f"); outline(fx,fy,16,28,"#555",2);}
+
+    // Joyful surrounding friends — smiling eyes, big open smiles, some arms raised
+    const ringR=130;
+    for (let i=0;i<14;i++){
+      const a=(i/14)*Math.PI*2 + bobT*0.02;
+      const rx=cx+Math.cos(a)*ringR;
+      const ry=cy+Math.sin(a)*ringR + Math.sin(bobT*0.06+i)*2;
+
+      // head
+      rect(rx-10,ry-14,20,18,"#f2c5a0");
+
+      // SMILING eyes (crescent): thin rectangles higher than eyes, to read as ^ ^
+      rect(rx-7, ry-9, 6, 2, "#111");
+      rect(rx+1, ry-9, 6, 2, "#111");
+
+      // BIG open smile (laugh): a wider, taller mouth; add white "teeth" line
+      rect(rx-6, ry-3, 12, 5, "#b24b4b");     // mouth fill
+      rect(rx-5, ry-2, 10, 1, "#fff");        // teeth glint
+
+      // body
+      rect(rx-12,ry+4,24,28,"#39405f");
+
+      // One raised arm to look celebratory (alternating side)
+      if(i%2===0){
+        rect(rx-18, ry+2, 10, 4, "#39405f"); // left arm up
+      }else{
+        rect(rx+8, ry+2, 10, 4, "#39405f");  // right arm up
+      }
+    }
+
+    text("Path: Social + Study", W/2, 24, 18, "#111");
+    bobT+=dt*0.01;
+  }
+
+  // ===== Scene 5: Sleep + Social (crowd + extra credit cards/bills) =====
+  function drawScene5(dt){
+    rect(0,0,W,H,"#fff7fb");
+    // confetti
+    for (let i=0;i<40;i++){
+      const x=(i*57+(Date.now()/10|0))%W, y=(i*23+(Date.now()/15|0))%H;
+      rect(x,y,4,4,i%3?"#ff8fd6":"#a5e1ff");
+    }
+
+    // Bills behind (more)
+    for (let i=0;i<8;i++){
+      const bx=W/2-240+i*60, by=70+((billY+i*10)%60);
+      rect(bx,by,90,60,"#ffffff");
+      outline(bx,by,90,60,"#d0d0d0",2);
+      rect(bx+8,by+12,74,8,"#ff4b4b");
+      rect(bx+8,by+30,60,6,"#dcdcdc");
+      text("$ TOTAL DUE",bx+45,by+40,10,"#333");
+    }
+    billY+=dt*0.02;
+
+    // Extra scattered credit cards
+    const colors = ["#4b7bec","#20bf6b","#fd9644","#eb3b5a","#8854d0","#2d98da"];
+    for(let i=0;i<14;i++){
+      const cw=52,ch=32;
+      const cx=W/2 - 260 + (i%7)*80 + ((i*13)%10);
+      const cy= 60 + Math.floor(i/7)*46 + ((i*7)%8);
+      const col = colors[i%colors.length];
+      rect(cx,cy,cw,ch,col);
+      outline(cx,cy,cw,ch,"#111",2);
+      rect(cx+6,cy+8,10,8,"#d4c27a");   // chip
+      rect(cx+24,cy+8,20,4,"#ffffff"); // stripe
+      rect(cx+24,cy+16,18,3,"#ffffff");// numbers
+    }
+
+    // Bigger crowd (back + mid rows)
+    const Cx=W/2, Cy=H/2+10;
+
+    for (let i=-4;i<=4;i++){
+      const ox=i*36 + Math.sin(Date.now()*0.003+i)*2;
+      const oy=Math.cos(Date.now()*0.003+i)*2;
+      rect(Cx-16+ox, Cy-74+oy, 32, 28, "#f2c5a0"); // head
+      starAt(Cx-6+ox, Cy-62+oy, 5, 3, 2, "#ffd400");
+      starAt(Cx+6+ox,  Cy-62+oy, 5, 3, 2, "#ffd400");
+      rect(Cx-20+ox, Cy-46+oy, 40, 46, "#ffb6c1"); // body
+    }
+
+    for (let i=-3;i<=3;i++){
+      const ox=i*44 + Math.sin(Date.now()*0.003+i*1.3)*2;
+      const oy=Math.cos(Date.now()*0.003+i*1.1)*2;
+      rect(Cx-16+ox, Cy-54+oy, 32, 28, "#f2c5a0");
+      starAt(Cx-6+ox, Cy-42+oy, 5, 3, 2, "#ffd400");
+      starAt(Cx+6+ox, Cy-42+oy, 5, 3, 2, "#ffd400");
+      rect(Cx-20+ox, Cy-26+oy, 40, 46, "#ffb6c1");
+    }
+
+    // Central student
+    rect(Cx-18, Cy-72, 36, 30, "#f2c5a0");     // head
+    rect(Cx-18, Cy-72, 36, 6, "#3a2d28");      // hair
+    rect(Cx-10, Cy-68, 8, 4, "#3a2d28");
+    rect(Cx-8,  Cy-60, 6, 6, "#111");          // eyes
+    rect(Cx+4,  Cy-60, 6, 6, "#111");
+    rect(Cx-1,  Cy-56, 2, 4, "#d9a98b");       // nose
+    rect(Cx-6,  Cy-49, 12, 3, "#b24b4b");      // smile
+    rect(Cx-22, Cy-42, 44, 54, "#7ec8e3");     // body
+
+    for (let i=-4;i<=4;i++){                   // hugging arms
+      const ox=i*36;
+      rect(Cx-52+ox, Cy-16, 32, 12, "#7ec8e3");
+      rect(Cx+20+ox, Cy-16, 32, 12, "#ffb6c1");
+    }
+
+    text("Path: Sleep + Social", W/2, 24, 18, "#111");
+  }
+
+  // ===== Loop =====
+  let last=performance.now();
+  function frame(now){
+    const dt=Math.min(60,now-last); last=now;
+    rect(0,0,W,H,"#ffffff");
+    if(scene===1) drawScene1(dt);
+    else if(scene===2) drawScene2();
+    else if(scene===3) drawScene3(dt);
+    else if(scene===4) drawScene4(dt);
+    else if(scene===5) drawScene5(dt);
+    mouse.clicked=false; requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  cvs.addEventListener('click',()=>{if(scene===1) tryOpenDoor(mouse.x,mouse.y);});
+})();
+</script>
+</body>
+</html>
