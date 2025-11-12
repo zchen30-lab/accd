@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ArtCenter — Pixel Paths</title>
+<title>ArtCenter — Pixel Paths (Polished)</title>
 <style>
   html,body{margin:0;height:100%;background:#fff;overflow:hidden}
   canvas{display:block;width:100vw;height:100vh;image-rendering: pixelated;touch-action:none}
@@ -14,7 +14,7 @@
 <canvas id="cv"></canvas>
 <script>
 (() => {
-  // ===== Canvas =====
+  // ===== Canvas / DPI =====
   const cvs = document.getElementById('cv');
   const ctx = cvs.getContext('2d');
   let W=0,H=0,DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
@@ -22,20 +22,34 @@
     cvs.width=(W*DPR)|0;cvs.height=(H*DPR)|0;ctx.setTransform(DPR,0,0,DPR,0,0);ctx.imageSmoothingEnabled=false;}
   addEventListener('resize',resize);resize();
 
-  // ===== Helpers =====
+  // ===== Util =====
+  const R2 = Math.random;
+  const TAU = Math.PI*2;
   function fill(c){ctx.fillStyle=c;}
   function rect(x,y,w,h,c){if(c)fill(c);ctx.fillRect(x|0,y|0,w|0,h|0);}
   function outline(x,y,w,h,c,sw=1){ctx.strokeStyle=c;ctx.lineWidth=sw;ctx.strokeRect(x|0,y|0,w|0,h|0);}
-  function circle(x,y,r,c){if(c)fill(c);ctx.beginPath();ctx.arc(x|0,y|0,r|0,0,Math.PI*2);ctx.fill();}
+  function circle(x,y,r,c){if(c)fill(c);ctx.beginPath();ctx.arc(x|0,y|0,r|0,0,TAU);ctx.fill();}
   function text(t,x,y,s=12,c="#000",a="center"){ctx.font=`bold ${s|0}px PixelSys, monospace`;ctx.textAlign=a;ctx.textBaseline="top";fill(c);ctx.fillText(t,x|0,y|0);}
   function inRect(mx,my,x,y,w,h){return mx>=x&&my>=y&&mx<=x+w&&my<=y+h;}
-  function starAt(x,y,r1,r2,points,col){
-    fill(col); ctx.beginPath();
-    for(let i=0;i<points*2;i++){const ang=i*Math.PI/points;const r=i%2?r2:r1;ctx.lineTo(x+Math.cos(ang)*r,y+Math.sin(ang)*r);}
-    ctx.closePath(); ctx.fill();
+  function starAt(x,y,r1=5,r2=3,points=4,col="#ffd400"){ // cleaner star
+    ctx.beginPath();
+    for(let i=0;i<points*2;i++){
+      const ang=i*Math.PI/points;
+      const r=i%2?r2:r1;
+      ctx.lineTo(x+Math.cos(ang)*r,y+Math.sin(ang)*r);
+    }
+    ctx.closePath();
+    fill(col); ctx.fill();
+  }
+  function shadeBand(x,y,w,h,alpha=0.08){ // subtle vignette band
+    const g=ctx.createLinearGradient(x,y,x+w,y);
+    g.addColorStop(0,`rgba(0,0,0,${alpha})`);
+    g.addColorStop(0.5,`rgba(0,0,0,0)`);
+    g.addColorStop(1,`rgba(0,0,0,${alpha})`);
+    fill(g); rect(x,y,w,h);
   }
 
-  // ===== Mouse =====
+  // ===== Input =====
   const mouse={x:-9999,y:-9999,down:false,clicked:false};
   cvs.addEventListener('mousemove',e=>{mouse.x=e.offsetX;mouse.y=e.offsetY;});
   cvs.addEventListener('mouseleave',()=>{mouse.x=-9999;mouse.y=-9999;});
@@ -43,14 +57,178 @@
   addEventListener('mouseup',()=>{mouse.down=false;});
   cvs.addEventListener('click',()=>{mouse.clicked=true;});
 
-  // ===== State =====
+  // ===== Global State =====
   let scene=1;
   let doorOpen=0,doorOpening=false,whiteFade=0;
+  let tNow=0, last=performance.now();
 
   const options=["Sleep","Social","Study"];
   const selected=new Set(); let confirmEnabled=false;
+  let uiPulse=0; // for subtle button pulse
+  let selectTween=0; // feedback when an option toggles
 
-  // Tickers (top + bottom for Sleep+Study)
+  // ===== Shared micro particles (sparkles/confetti) =====
+  const particles=[];
+  function spawnSparkle(x,y,col){ // quick sparkle used across scenes
+    particles.push({x,y,vx:(R2()*2-1)*0.6,vy:(-1-R2()*0.5),a:1,life:800,col,kind:"sp"});
+  }
+  function spawnConfettiArea(x1,y1,x2,y2,n=30){
+    const colors=["#ff8fd6","#a5e1ff","#ffd400","#7cf4b6"];
+    for(let i=0;i<n;i++){
+      particles.push({
+        x:x1+R2()*(x2-x1), y:y1+R2()*(y2-y1),
+        vx:(R2()*2-1)*0.4, vy:(R2()*-1-0.5),
+        a:1, life:1200+R2()*800, col:colors[i%colors.length], kind:"cf"
+      });
+    }
+  }
+  function updateParticles(dt){
+    for(let i=particles.length-1;i>=0;i--){
+      const p=particles[i];
+      p.life-=dt;
+      if(p.life<=0){particles.splice(i,1);continue;}
+      p.x+=p.vx*dt*0.06; p.y+=p.vy*dt*0.06;
+      p.vy+=0.0006*dt; // gravity
+      p.a = Math.max(0, p.life/1200);
+      if(p.kind==="sp"){rect(p.x,p.y,2,2,`${p.col}${(Math.min(1,p.a)).toFixed(2).slice(1)}`);}
+      else{rect(p.x,p.y,3,3,p.col); outline(p.x,p.y,3,3,"#111",1);}
+    }
+  }
+
+  // ===== Scene 1 — Door with parallax light & hover =====
+  function tryOpenDoor(mx,my){
+    const gateW=Math.min(W*0.6,520),gateH=Math.min(H*0.55,360);
+    const gx=(W-gateW)/2, gy=H-gateH-60;
+    if(inRect(mx,my,gx,gy,gateW,gateH)&&!doorOpening) doorOpening=true;
+  }
+
+  function drawScene1(dt){
+    rect(0,0,W,H,"#eef3ff");
+    // title
+    const logoR=Math.min(100,W*0.08),logoY=90;
+    circle(W/2,logoY,logoR,"#da5634"); text("ArtCenter",W/2,logoY+logoR+12,28,"#111");
+
+    const gateW=Math.min(W*0.6,520),gateH=Math.min(H*0.55,360);
+    const gx=(W-gateW)/2, gy=H-gateH-60;
+    // outer
+    rect(gx,gy,gateW,gateH,"#c7d0e8"); outline(gx,gy,gateW,gateH,"#8fa3d1",4);
+    // inner panel
+    const inner={x:gx+16,y:gy+16,w:gateW-32,h:gateH-32};
+    rect(inner.x,inner.y,inner.w,inner.h,"#edf2ff"); outline(inner.x,inner.y,inner.w,inner.h,"#b0c0e6",2);
+
+    // parallax "light seam" between doors
+    const gap=6, half=(inner.w-gap)/2, openPx=Math.floor(half*doorOpen);
+    const mx = Math.max(0, Math.min(inner.w, (mouse.x - inner.x)));
+    const lightX = inner.x + half - 2 + (mx - inner.w/2) * 0.02;
+
+    // left & right doors
+    rect(inner.x-openPx,inner.y,half,inner.h,"#b9c9ef");
+    rect(inner.x+half+gap+openPx,inner.y,half,inner.h,"#b9c9ef");
+    // handles
+    rect(inner.x+half-10-openPx,inner.y+inner.h/2-15,8,30,"#7b8db8");
+    rect(inner.x+half+gap+2+openPx,inner.y+inner.h/2-15,8,30,"#7b8db8");
+
+    // light seam glint
+    rect(lightX, inner.y+8, 4, inner.h-16, "rgba(255,255,255,0.35)");
+
+    // student silhouette (parallax wobble)
+    const wob = Math.sin(tNow*0.004)*2;
+    const sx=W/2+wob*1.2, sy=gy+gateH-20;
+    rect(sx-18,sy-30,12,30,"#333"); rect(sx+6,sy-30,12,30,"#333");
+    rect(sx-22,sy-72,44,44,"#222a48");
+    rect(sx-32,sy-62,10,22,"#222a48"); rect(sx+22,sy-62,10,22,"#222a48");
+    rect(sx-18,sy-102,36,30,"#f2c5a0");
+    rect(sx-10,sy-92,6,6,"#111"); rect(sx+4,sy-92,6,6,"#111");
+
+    // hover hint
+    const hover=inRect(mouse.x,mouse.y,gx,gy,gateW,gateH);
+    if(hover){shadeBand(gx,gy,gateW,gateH,0.12); text("Click to enter",W/2,gy+gateH+8,12,"#333");}
+    if(mouse.clicked&&hover){ spawnSparkle(mouse.x,mouse.y,"#ffff00"); tryOpenDoor(mouse.x,mouse.y); }
+
+    // open + fade
+    if(doorOpening&&doorOpen<1){doorOpen=Math.min(1,doorOpen+dt*0.0016); if(doorOpen>=1) whiteFade=0.001;}
+    if(whiteFade>0){whiteFade=Math.min(1,whiteFade+dt*0.003); rect(0,0,W,H,`rgba(255,255,255,${whiteFade.toFixed(3)})`);
+      if(whiteFade>=1){selected.clear();confirmEnabled=false;scene=2;}
+    }
+  }
+
+  // ===== Scene 2 — Choices w/ richer feedback =====
+  const choiceBoxes=[]; let confirmBox=null; let lastToggleTime=0;
+  function drawScene2(dt){
+    rect(0,0,W,H,"#ffffff");
+    const bw=Math.min(740,W-60),bh=150,bx=(W-bw)/2,by=40;
+    rect(bx,by,bw,bh,"#f7f7ff"); outline(bx,by,bw,bh,"#111",3);
+    text("Welcome to your ACCD college life.",bx+bw/2,by+14,22,"#111");
+    text("What kind of path will you choose?",bx+bw/2,by+44,18,"#333");
+    text("(Please select two options)",bx+bw/2,by+74,14,"#777");
+
+    // subtle UI pulse
+    uiPulse = (uiPulse + dt*0.004)%TAU;
+    const glow = Math.floor((Math.sin(uiPulse)*0.5+0.5)*20);
+
+    // options
+    const ow=180,oh=64,ox=(W-(ow*3+40*2))/2,oy=by+bh+40; choiceBoxes.length=0;
+    for(let i=0;i<3;i++){
+      const x=ox+i*(ow+40), y=oy, label=options[i], on=selected.has(label);
+      const isHover=inRect(mouse.x,mouse.y,x,y,ow,oh);
+      const bg = on ? "#ffe39a" : (isHover ? "#f0f0f5" : "#f7f7fb");
+      rect(x,y,ow,oh,bg); outline(x,y,ow,oh,on ? "#cc9a00" : "#111",3);
+      // tiny icons
+      if(label==="Sleep"){rect(x+10,y+12,14,10,"#111"); rect(x+12,y+10,10,4,"#111");}
+      if(label==="Social"){circle(x+16,y+18,6,"#ff8fd6"); circle(x+28,y+18,6,"#a5e1ff");}
+      if(label==="Study"){rect(x+10,y+12,18,12,"#7ec8e3"); rect(x+8,y+24,22,4,"#111");}
+      text(label,x+ow/2,y+oh/2-12,20,"#111"); text(on?"Selected":"Click to select",x+ow/2,y+oh/2+6,12,"#666");
+      choiceBoxes.push({x,y,w:ow,h:oh,label});
+    }
+
+    // clicks
+    if(mouse.clicked){
+      for(const b of choiceBoxes){
+        if(inRect(mouse.x,mouse.y,b.x,b.y,b.w,b.h)){
+          if(selected.has(b.label)) selected.delete(b.label);
+          else { if(selected.size<2) selected.add(b.label); else {const first=[...selected][0]; selected.delete(first); selected.add(b.label);} }
+          lastToggleTime = tNow; selectTween=1; spawnSparkle(mouse.x,mouse.y,"#ffff88");
+        }
+      }
+    }
+    if(selectTween>0){selectTween=Math.max(0,selectTween-dt*0.004);}
+
+    confirmEnabled=(selected.size===2);
+    const cw=200,ch=56,cx=(W-cw)/2,cy=oy+oh+40;
+    rect(cx,cy,cw,ch,confirmEnabled?`rgba(164,255,177,1)`:`#e2e2e2`);
+    outline(cx,cy,cw,ch,"#111",3);
+    // glowing border when ready
+    if(confirmEnabled && Math.sin(uiPulse)>0.6){outline(cx-3,cy-3,cw+6,ch+6,"#9cffab",2);}
+    text("Confirm",cx+cw/2,cy+ch/2-10,20,"#111");
+    text(confirmEnabled?[...selected].join(" + "):"Pick exactly two",cx+cw/2,cy+ch/2+6,12,"#333");
+    confirmBox={x:cx,y:cy,w:cw,h:ch};
+
+    if(mouse.clicked&&confirmEnabled&&inRect(mouse.x,mouse.y,cx,cy,cw,ch)){
+      const set=[...selected].sort().join("+");
+      if(set==="Sleep+Study") scene=3;
+      else if(set==="Social+Study") scene=4;
+      else if(set==="Sleep+Social") scene=5;
+      spawnConfettiArea(0,0,W,H,50);
+    }
+    updateParticles(dt);
+  }
+
+  // ===== Reusable pixel people =====
+  function drawPixelHead(x,y,skin="#f2c5a0"){
+    rect(x-8,y-10,16,16,skin);
+    rect(x-5,y-6,4,4,"#111"); rect(x+1,y-6,4,4,"#111"); // eyes
+    rect(x-3,y+1,6,2,"#b24b4b"); // mouth
+  }
+  function drawHair(x,y,color="#3a2d28",style=0){
+    if(style===0){rect(x-8,y-11,16,5,color);}
+    if(style===1){rect(x-10,y-11,20,4,color); rect(x-11,y-9,3,8,color); rect(x+8,y-9,3,8,color);}
+    if(style===2){rect(x-9,y-12,18,6,color); rect(x-9,y-6,3,6,color); rect(x+6,y-6,3,6,color);}
+  }
+  function drawBody(x,y,w,h,col="#7ec8e3"){rect(x-w/2,y,w,h,col);}
+  function drawTeethGlint(x,y){rect(x-4,y,8,1,"#fff");}
+
+  // ===== Scene 3 — Sleep + Study: detailed desk setup =====
+  // Tickers preserved as "screen content" at top & bottom
   const baseItems=[
     {label:"Google",color:"#34a853"},
     {label:"Tesla",color:"#cc0000"},
@@ -60,7 +238,7 @@
     {label:"Amazon",color:"#ff9900"},
     {label:"Microsoft",color:"#737373"},
   ];
-  const TICKER_ROW_H=48;
+  const TICKER_ROW_H=42;
   const tickersTop=[
     {x:0,speed:1.25,items:baseItems},
     {x:0,speed:1.6, items:[...baseItems].reverse()},
@@ -71,280 +249,249 @@
     {x:0,speed:1.55,items:[...baseItems]},
   ];
 
-  let bobT=0, billY=10;
-
-  // ===== Scene 1 =====
-  function tryOpenDoor(mx,my){
-    const gateW=Math.min(W*0.6,520),gateH=Math.min(H*0.55,360);
-    const gx=(W-gateW)/2, gy=H-gateH-60;
-    if(inRect(mx,my,gx,gy,gateW,gateH)&&!doorOpening) doorOpening=true;
-  }
-
-  function drawScene1(dt){
-    rect(0,0,W,H,"#f2f6ff"); rect(0,H-40,W,40,"#e6e6e6");
-    const logoR=Math.min(100,W*0.08),logoY=90;
-    circle(W/2,logoY,logoR,"#da5634"); text("ArtCenter",W/2,logoY+logoR+12,28,"#111");
-
-    const gateW=Math.min(W*0.6,520),gateH=Math.min(H*0.55,360);
-    const gx=(W-gateW)/2, gy=H-gateH-60;
-    rect(gx,gy,gateW,gateH,"#c7d0e8"); outline(gx,gy,gateW,gateH,"#8fa3d1",4);
-    const inner={x:gx+16,y:gy+16,w:gateW-32,h:gateH-32};
-    rect(inner.x,inner.y,inner.w,inner.h,"#edf2ff"); outline(inner.x,inner.y,inner.w,inner.h,"#b0c0e6",2);
-    const gap=6, half=(inner.w-gap)/2, openPx=Math.floor(half*doorOpen);
-    rect(inner.x-openPx,inner.y,half,inner.h,"#b9c9ef");
-    rect(inner.x+half+gap+openPx,inner.y,half,inner.h,"#b9c9ef");
-    rect(inner.x+half-10-openPx,inner.y+inner.h/2-15,8,30,"#7b8db8");
-    rect(inner.x+half+gap+2+openPx,inner.y+inner.h/2-15,8,30,"#7b8db8");
-
-    const sx=W/2, sy=gy+gateH-20;
-    rect(sx-18,sy-30,12,30,"#333"); rect(sx+6,sy-30,12,30,"#333");
-    rect(sx-22,sy-72,44,44,"#222a48");
-    rect(sx-32,sy-62,10,22,"#222a48"); rect(sx+22,sy-62,10,22,"#222a48");
-    rect(sx-18,sy-102,36,30,"#f2c5a0"); rect(sx-10,sy-92,6,6,"#111"); rect(sx+4,sy-92,6,6,"#111");
-
-    const hover=inRect(mouse.x,mouse.y,gx,gy,gateW,gateH);
-    if(mouse.clicked&&hover) tryOpenDoor(mouse.x,mouse.y);
-
-    if(doorOpening&&doorOpen<1){doorOpen=Math.min(1,doorOpen+dt*0.0016); if(doorOpen>=1) whiteFade=0.001;}
-    if(whiteFade>0){whiteFade=Math.min(1,whiteFade+dt*0.003); rect(0,0,W,H,`rgba(255,255,255,${whiteFade.toFixed(3)})`);
-      if(whiteFade>=1){selected.clear();confirmEnabled=false;scene=2;}}
-  }
-
-  // ===== Scene 2 =====
-  const choiceBoxes=[]; let confirmBox=null;
-  function drawScene2(){
-    rect(0,0,W,H,"#ffffff");
-    const bw=Math.min(740,W-60),bh=150,bx=(W-bw)/2,by=60;
-    rect(bx,by,bw,bh,"#f7f7ff"); outline(bx,by,bw,bh,"#111",3);
-    text("Welcome to your ACCD college life.",bx+bw/2,by+16,22,"#111");
-    text("What kind of path will you choose?",bx+bw/2,by+48,18,"#333");
-    text("(Please select two options)",bx+bw/2,by+78,14,"#777");
-
-    const ow=180,oh=64,ox=(W-(ow*3+40*2))/2,oy=by+bh+40; choiceBoxes.length=0;
-    for(let i=0;i<3;i++){
-      const x=ox+i*(ow+40), y=oy, label=options[i], on=selected.has(label);
-      rect(x,y,ow,oh,on?"#ffe9a6":"#f1f1f1"); outline(x,y,ow,oh,on?"#cc9a00":"#111",3);
-      text(label,x+ow/2,y+oh/2-12,20,"#111"); text(on?"Selected":"Click to select",x+ow/2,y+oh/2+6,12,"#666");
-      choiceBoxes.push({x,y,w:ow,h:oh,label});
-    }
-
-    if(mouse.clicked){
-      for(const b of choiceBoxes){
-        if(inRect(mouse.x,mouse.y,b.x,b.y,b.w,b.h)){
-          if(selected.has(b.label)) selected.delete(b.label);
-          else { if(selected.size<2) selected.add(b.label); else {const first=[...selected][0]; selected.delete(first); selected.add(b.label);} }
-        }
-      }
-    }
-
-    confirmEnabled=(selected.size===2);
-    const cw=180,ch=56,cx=(W-cw)/2,cy=oy+oh+40;
-    rect(cx,cy,cw,ch,confirmEnabled?"#a4ffb1":"#e2e2e2"); outline(cx,cy,cw,ch,"#111",3);
-    text("Confirm",cx+cw/2,cy+ch/2-10,20,"#111");
-    text(confirmEnabled?[...selected].join(" + "):"Pick exactly two",cx+cw/2,cy+ch/2+6,12,"#333");
-    confirmBox={x:cx,y:cy,w:cw,h:ch};
-
-    if(mouse.clicked&&confirmEnabled&&inRect(mouse.x,mouse.y,cx,cy,cw,ch)){
-      const set=[...selected].sort().join("+");
-      if(set==="Sleep+Study") scene=3;
-      else if(set==="Social+Study") scene=4;
-      else if(set==="Sleep+Social") scene=5;
-    }
-  }
-
-  // ===== Scene 3: Sleep + Study (tickers top & bottom) =====
-  function drawPixelNerd(cx,cy){
-    rect(cx-30,cy-54,24,36,"#3b5aa8"); rect(cx-24,cy-60,48,60,"#1a1f33");
-    rect(cx+26,cy-46,8,30,"#1a1f33"); rect(cx+34,cy-46,8,30,"#1a1f33");
-    rect(cx-36,cy-46,10,26,"#1a1f33");
-    rect(cx-16,cy-92,32,28,"#f2c5a0");
-    rect(cx-6,cy-82,4,4,"#ff8fa3"); rect(cx+8,cy-76,4,4,"#ff8fa3");
-    rect(cx-14,cy-88,14,10,"#000"); rect(cx-12,cy-86,10,6,"#bfe8ff");
-    rect(cx+0,cy-88,14,10,"#000"); rect(cx+2,cy-86,10,6,"#bfe8ff");
-    rect(cx-1,cy-86,2,6,"#000");
-    rect(cx-6,cy-66,6,6,"#fff"); rect(cx+0,cy-66,6,6,"#fff");
-    rect(cx-18,cy-102,36,8,"#111"); rect(cx-26,cy-110,52,10,"#111");
-    rect(cx-16,cy,12,34,"#333"); rect(cx+6,cy,12,34,"#333");
-    rect(cx-64,cy+34,40,10,"#ffce54"); rect(cx-64,cy+44,44,10,"#5bc0de"); rect(cx-64,cy+54,52,10,"#ed5565");
-  }
-
   function drawTickerRow(y,t){
     const th=TICKER_ROW_H; rect(0,y,W,th,"#f6f6f6"); outline(0,y,W,th,"#111",2);
-    t.x-=t.speed; let x=t.x; const boxW=160;
+    t.x-=t.speed; let x=t.x; const boxW=150;
     while(x<W+boxW){
       const idx=Math.floor((x-t.x)/boxW)%t.items.length; const it=t.items[idx];
       rect(x,y+4,boxW-8,th-8,it.color); outline(x,y+4,boxW-8,th-8,"#111",2);
-      text(it.label,x+(boxW-8)/2,y+14,14,"#fff");
+      text(it.label,x+(boxW-8)/2,y+12,12,"#fff");
       x+=boxW;
     }
     if(t.x<=-boxW) t.x+=boxW;
   }
 
-  function drawScene3(dt){
-    rect(0,0,W,H,"#ffffff");
-
-    // TOP rows
-    const topRows=tickersTop.length;
-    for(let r=0;r<topRows;r++){ drawTickerRow(r*TICKER_ROW_H, tickersTop[r]); }
-
-    // BOTTOM rows
-    const bottomRows=tickersBottom.length;
-    for(let r=0;r<bottomRows;r++){
-      const y=H - (bottomRows-r)*TICKER_ROW_H;
-      drawTickerRow(y, tickersBottom[r]);
+  function drawDeskProps(cx,cy){
+    // desk
+    rect(cx-180,cy+52,360,14,"#6b4e2e"); outline(cx-180,cy+52,360,14,"#3c2a16",2);
+    // monitor stands
+    rect(cx-120,cy-18,80,52,"#1a1f33"); rect(cx+40,cy-18,80,52,"#1a1f33");
+    outline(cx-120,cy-18,80,52,"#000",2); outline(cx+40,cy-18,80,52,"#000",2);
+    // screen glow (subtle)
+    rect(cx-118,cy-16,76,24,"#bfe8ff"); rect(cx-118,cy+10,76,24,"#9ad3ff");
+    rect(cx+42,cy-16,76,24,"#bfe8ff"); rect(cx+42,cy+10,76,24,"#9ad3ff");
+    // keyboard
+    rect(cx-62,cy+36,124,10,"#222"); outline(cx-62,cy+36,124,10,"#000",1);
+    for(let i=0;i<10;i++){rect(cx-58+i*12,cy+38,8,6,"#444");}
+    // coffee mug + steam
+    rect(cx-170,cy+40,16,16,"#c0392b"); rect(cx-154,cy+44,6,8,"#c0392b");
+    const sY = cy+38+Math.sin(tNow*0.01)*2;
+    rect(cx-166,sY,2,6,"#eee"); rect(cx-164,sY-4,2,6,"#eee"); rect(cx-162,sY-7,2,6,"#eee");
+    // book piles with spines
+    for(let i=0;i<4;i++){
+      const bx=cx+160, by=cy+44-i*10; rect(bx,by,24,8, i%2?"#ffd400":"#7ec8e3");
+      rect(bx+2,by+2,12,4,"#111");
     }
-
-    // Nerd centered
-    const cx=W/2, cy=H/2;
-    drawPixelNerd(cx,cy);
-
-    text("Path: Sleep + Study", W/2, topRows*TICKER_ROW_H + 10, 18, "#111");
+    // sticky notes
+    rect(cx-12,cy-24,12,10,"#ffe39a"); rect(cx+10,cy-24,12,10,"#a5e1ff");
+    // alarm clock (blinking)
+    rect(cx-12,cy+18,24,12,"#111"); const blink = (Math.floor(tNow/500)%2)===0;
+    text(blink?"02:47":"02 47",cx,cy+16,10, blink?"#ff4b4b":"#9cffab");
   }
 
-  // ===== Scene 4: Social + Study (joyful crowd, white bg, star decor) =====
+  function drawPixelNerd(cx,cy){
+    // body & hoodie
+    rect(cx-26,cy-52,52,56,"#1a1f33"); // torso
+    rect(cx-30,cy-60,60,12,"#3b5aa8"); // hoodie hood edge
+    // arms
+    rect(cx-40,cy-28,14,8,"#1a1f33"); rect(cx+26,cy-28,14,8,"#1a1f33");
+    // head & hair & glasses
+    rect(cx-16,cy-88,32,26,"#f2c5a0");
+    drawHair(cx,cy-88,"#222",1);
+    rect(cx-14,cy-78,14,8,"#000"); rect(cx-12,cy-76,10,4,"#bfe8ff");
+    rect(cx+0,cy-78,14,8,"#000");  rect(cx+2,cy-76,10,4,"#bfe8ff");
+    rect(cx-1,cy-76,2,4,"#000"); // nose bridge
+    // eye bags
+    rect(cx-10,cy-66,8,3,"#333"); rect(cx+2,cy-66,8,3,"#333");
+    // legs
+    rect(cx-12,cy+4,10,32,"#333"); rect(cx+2,cy+4,10,32,"#333");
+    // desk props
+    drawDeskProps(cx,cy);
+  }
+
+  function drawScene3(dt){
+    rect(0,0,W,H,"#ffffff");
+    // top rows
+    for(let r=0;r<tickersTop.length;r++){ drawTickerRow(r*TICKER_ROW_H, tickersTop[r]); }
+    // bottom rows
+    for(let r=0;r<tickersBottom.length;r++){
+      const y=H - (tickersBottom.length-r)*TICKER_ROW_H;
+      drawTickerRow(y, tickersBottom[r]);
+    }
+    // ambient vignette
+    shadeBand(0,0,W,H,0.06);
+    const cx=W/2, cy=Math.floor(H/2);
+    drawPixelNerd(cx,cy);
+    text("Path: Sleep + Study", W/2, (tickersTop.length)*TICKER_ROW_H + 8, 16, "#111");
+  }
+
+  // ===== Scene 4 — Social + Study: joyful crowd + decor =====
+  let bobT=0;
+  function drawBalloon(x,y,col){
+    rect(x-6,y-10,12,14,col); outline(x-6,y-10,12,14,"#111",1);
+    rect(x-1,y+4,2,8,"#111"); // string
+  }
+  function drawFriend(rx,ry,hue=0){
+    rect(rx-10,ry-14,20,18,"#f2c5a0"); // head
+    // eyes (smiling ^ ^) & bright mouth
+    rect(rx-7, ry-9, 6, 2, "#111");
+    rect(rx+1, ry-9, 6, 2, "#111");
+    rect(rx-6, ry-2, 12, 5, "#b24b4b"); drawTeethGlint(rx,ry-1);
+    // body w/ assorted colors
+    const cols=["#39405f","#7ec8e3","#ffb6c1","#ffd400"]; const c=cols[hue%cols.length];
+    rect(rx-12,ry+4,24,28,c);
+    // celebratory arm
+    if(hue%2===0){ rect(rx-18, ry+2, 10, 4, c); } else { rect(rx+8, ry+2, 10, 4, c); }
+  }
+  function drawIV(cx,cy){
+    rect(cx+60,cy-110,6,140,"#cbd3ff"); rect(cx+46,cy-110,34,6,"#cbd3ff");
+    rect(cx+62,cy-92+Math.sin(bobT)*2,22,28,"#9cc2ff");
+    for(let i=0;i<3;i++){circle(cx+72,cy-60+((bobT*6+i*18)%60),3,"#9cc2ff");}
+    rect(cx+20,cy-36,40,8,"#2b2f44");
+  }
+
   function drawScene4(dt){
     rect(0,0,W,H,"#ffffff");
-
-    // Star decorations (soft twinkle)
-    const N = 60;
-    for(let i=0;i<N;i++){
-      const x = (i*73 + (Date.now()/8|0)) % W;
-      const y = (i*37 + (Date.now()/13|0)) % H;
+    // stars
+    for(let i=0;i<80;i++){
+      const x=(i*71 + (tNow/8|0)) % W;
+      const y=(i*37 + (tNow/13|0)) % H;
       starAt(x, y, 5, 3, 2, i%3 ? "#ffd400" : "#a2c8ff");
+    }
+    // balloons + confetti hints
+    for(let i=0;i<8;i++){
+      const bx=(i*W/8 + Math.sin(tNow*0.001+i)*10)%W;
+      const by=60 + Math.cos(tNow*0.0012+i)*6;
+      drawBalloon(bx,by, i%2?"#ff8fd6":"#a5e1ff");
     }
 
     const cx=W/2, cy=H/2-10;
+    // tired central student + IV
+    rect(cx-20,cy-50,40,56,"#2b2f44");
+    rect(cx-16,cy-92,32,22,"#e8b899");
+    rect(cx-10,cy-86,8,5,"#333"); rect(cx+2,cy-86,8,5,"#333"); // dark circles
+    rect(cx-14,cy-82,8,4,"#d09e84"); rect(cx+6, cy-82,8,4,"#d09e84");
+    drawIV(cx,cy);
 
-    // Central student (still tired-looking as contrast)
-    rect(cx-20,cy-50,40,56,"#2b2f44"); // body
-    rect(cx-16,cy-92,32,22,"#e8b899"); // head
-    rect(cx-14,cy-82,8,4,"#d09e84");  // cheeks
-    rect(cx+6, cy-82,8,4,"#d09e84");
-    rect(cx-10,cy-86,8,5,"#333");     // dark circles
-    rect(cx+2, cy-86,8,5,"#333");
-    rect(cx+60,cy-110,6,140,"#cbd3ff"); rect(cx+46,cy-110,34,6,"#cbd3ff"); // IV stand
-    rect(cx+62,cy-92+Math.sin(bobT)*2,22,28,"#9cc2ff");                     // IV bag
-    for(let i=0;i<3;i++){circle(cx+72,cy-60+((bobT*6+i*18)%60),3,"#9cc2ff");}
-    rect(cx+20,cy-36,40,8,"#2b2f44"); // arm to IV
+    // energy drinks
+    for(let i=0;i<10;i++){
+      const fx=(W*0.2)+i*(W*0.06), fy=H-58+Math.sin((bobT+i)*0.6)*2;
+      rect(fx,fy,16,28,"#1e1e1e"); rect(fx+2,fy+2,12,8,"#3f8d3f"); outline(fx,fy,16,28,"#555",2);
+    }
 
-    // Energy drink cans on floor
-    for(let i=0;i<8;i++){const fx=(W*0.25)+i*(W*0.06),fy=H-60+Math.sin((bobT+i)*0.6)*2;
-      rect(fx,fy,16,28,"#1e1e1e"); rect(fx+2,fy+2,12,8,"#3f8d3f"); outline(fx,fy,16,28,"#555",2);}
-
-    // Joyful surrounding friends — smiling eyes, big open smiles, some arms raised
-    const ringR=130;
-    for (let i=0;i<14;i++){
-      const a=(i/14)*Math.PI*2 + bobT*0.02;
+    // ring of friends
+    const ringR=140;
+    for (let i=0;i<18;i++){
+      const a=(i/18)*TAU + bobT*0.02;
       const rx=cx+Math.cos(a)*ringR;
       const ry=cy+Math.sin(a)*ringR + Math.sin(bobT*0.06+i)*2;
-
-      // head
-      rect(rx-10,ry-14,20,18,"#f2c5a0");
-
-      // SMILING eyes (crescent): thin rectangles higher than eyes, to read as ^ ^
-      rect(rx-7, ry-9, 6, 2, "#111");
-      rect(rx+1, ry-9, 6, 2, "#111");
-
-      // BIG open smile (laugh): a wider, taller mouth; add white "teeth" line
-      rect(rx-6, ry-3, 12, 5, "#b24b4b");     // mouth fill
-      rect(rx-5, ry-2, 10, 1, "#fff");        // teeth glint
-
-      // body
-      rect(rx-12,ry+4,24,28,"#39405f");
-
-      // One raised arm to look celebratory (alternating side)
-      if(i%2===0){
-        rect(rx-18, ry+2, 10, 4, "#39405f"); // left arm up
-      }else{
-        rect(rx+8, ry+2, 10, 4, "#39405f");  // right arm up
+      drawFriend(rx,ry,i);
+      if(i%4===0){ // tiny emote bubbles
+        rect(rx-6,ry-26,12,8,"#fff"); outline(rx-6,ry-26,12,8,"#111",1);
+        text(["LOL","<3",":)","！"][i%4],rx,ry-26,8,"#111");
       }
     }
-
     text("Path: Social + Study", W/2, 24, 18, "#111");
     bobT+=dt*0.01;
+    updateParticles(dt);
   }
 
-  // ===== Scene 5: Sleep + Social (crowd + extra credit cards/bills) =====
+  // ===== Scene 5 — Sleep + Social: neon club + bills/cards =====
+  let billY=10;
+  function drawDiscoBall(cx,cy){
+    rect(cx-10,cy-50,2,30,"#999"); // chain
+    rect(cx-18,cy-18,36,36,"#dfe7ee"); outline(cx-18,cy-18,36,36,"#111",1);
+    for(let i=0;i<5;i++){ for(let j=0;j<5;j++){
+      const c = (i+j)%2 ? "#bcd4f6" : "#ffffff";
+      rect(cx-16+i*6, cy-16+j*6, 5,5, c);
+    }}
+    // rays
+    for(let k=0;k<8;k++){
+      const a=k*(TAU/8)+tNow*0.002;
+      const x2=cx+Math.cos(a)*140, y2=cy+Math.sin(a)*80;
+      ctx.globalAlpha=0.08; fill("#a5e1ff"); ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(x2,y2); ctx.lineTo(cx,cy); ctx.fill(); ctx.globalAlpha=1;
+    }
+  }
+
   function drawScene5(dt){
-    rect(0,0,W,H,"#fff7fb");
-    // confetti
-    for (let i=0;i<40;i++){
-      const x=(i*57+(Date.now()/10|0))%W, y=(i*23+(Date.now()/15|0))%H;
-      rect(x,y,4,4,i%3?"#ff8fd6":"#a5e1ff");
+    rect(0,0,W,H,"#0a0b14");
+    // neon gradient
+    const g=ctx.createLinearGradient(0,0,W,H);
+    g.addColorStop(0,"#12142a"); g.addColorStop(1,"#06101a");
+    fill(g); rect(0,0,W,H);
+
+    // confetti drift
+    for (let i=0;i<30;i++){
+      const x=(i*57+(tNow/10|0))%W, y=(i*23+(tNow/15|0))%H;
+      rect(x,y,3,3,i%3?"#ff8fd6":"#a5e1ff");
     }
 
-    // Bills behind (more)
-    for (let i=0;i<8;i++){
-      const bx=W/2-240+i*60, by=70+((billY+i*10)%60);
-      rect(bx,by,90,60,"#ffffff");
-      outline(bx,by,90,60,"#d0d0d0",2);
+    // back wall speakers
+    for(let i=0;i<6;i++){
+      const sx=60+i*(W-120)/5, sy=80;
+      rect(sx-20,sy-20,40,80,"#1b1e2c"); outline(sx-20,sy-20,40,80,"#000",2);
+      circle(sx,sy,10,"#333"); circle(sx,sy+26,14,"#333");
+    }
+
+    // bills behind
+    for (let i=0;i<10;i++){
+      const bx=W/2-280+i*60, by=70+((billY+i*10)%60);
+      rect(bx,by,90,60,"#ffffff"); outline(bx,by,90,60,"#d0d0d0",2);
       rect(bx+8,by+12,74,8,"#ff4b4b");
       rect(bx+8,by+30,60,6,"#dcdcdc");
       text("$ TOTAL DUE",bx+45,by+40,10,"#333");
     }
     billY+=dt*0.02;
 
-    // Extra scattered credit cards
+    // extra credit cards foreground
     const colors = ["#4b7bec","#20bf6b","#fd9644","#eb3b5a","#8854d0","#2d98da"];
-    for(let i=0;i<14;i++){
+    for(let i=0;i<18;i++){
       const cw=52,ch=32;
-      const cx=W/2 - 260 + (i%7)*80 + ((i*13)%10);
-      const cy= 60 + Math.floor(i/7)*46 + ((i*7)%8);
+      const cx=W/2 - 300 + (i%9)*70 + ((i*13)%10);
+      const cy= 60 + Math.floor(i/9)*42 + ((i*7)%8);
       const col = colors[i%colors.length];
-      rect(cx,cy,cw,ch,col);
-      outline(cx,cy,cw,ch,"#111",2);
-      rect(cx+6,cy+8,10,8,"#d4c27a");   // chip
-      rect(cx+24,cy+8,20,4,"#ffffff"); // stripe
-      rect(cx+24,cy+16,18,3,"#ffffff");// numbers
+      rect(cx,cy,cw,ch,col); outline(cx,cy,cw,ch,"#111",2);
+      rect(cx+6,cy+8,10,8,"#d4c27a"); rect(cx+24,cy+8,20,4,"#ffffff"); rect(cx+24,cy+16,18,3,"#ffffff");
+      if((tNow/400|0)%2===0) rect(cx+40,cy+2,6,2,"#fff"); // shimmer
     }
 
-    // Bigger crowd (back + mid rows)
-    const Cx=W/2, Cy=H/2+10;
+    // disco ball centerpiece
+    const Cx=W/2, Cy=120; drawDiscoBall(Cx,Cy);
 
-    for (let i=-4;i<=4;i++){
-      const ox=i*36 + Math.sin(Date.now()*0.003+i)*2;
-      const oy=Math.cos(Date.now()*0.003+i)*2;
-      rect(Cx-16+ox, Cy-74+oy, 32, 28, "#f2c5a0"); // head
-      starAt(Cx-6+ox, Cy-62+oy, 5, 3, 2, "#ffd400");
-      starAt(Cx+6+ox,  Cy-62+oy, 5, 3, 2, "#ffd400");
-      rect(Cx-20+ox, Cy-46+oy, 40, 46, "#ffb6c1"); // body
+    // crowd rows with happy faces
+    for (let row=0; row<2; row++){
+      for (let i=-4;i<=4;i++){
+        const ox=i*36 + Math.sin(tNow*0.003+i)*2;
+        const oy=Math.cos(tNow*0.003+i)*2 + row*24;
+        const x=Cx-16+ox, y=(H/2)+oy;
+        rect(x, y-20, 32, 20, "#f2c5a0"); // head
+        starAt(x+10, y-10, 5,3,2, "#ffd400");
+        starAt(x+20, y-8, 5,3,2, "#ffd400");
+        rect(x-4, y+2, 40, 46, row? "#7ec8e3":"#ffb6c1"); // body
+        // smiles
+        rect(x+6, y-6, 6, 2, "#111"); rect(x+18, y-6, 6, 2, "#111");
+        rect(x+10, y-1, 12, 3, "#b24b4b");
+      }
     }
 
-    for (let i=-3;i<=3;i++){
-      const ox=i*44 + Math.sin(Date.now()*0.003+i*1.3)*2;
-      const oy=Math.cos(Date.now()*0.003+i*1.1)*2;
-      rect(Cx-16+ox, Cy-54+oy, 32, 28, "#f2c5a0");
-      starAt(Cx-6+ox, Cy-42+oy, 5, 3, 2, "#ffd400");
-      starAt(Cx+6+ox, Cy-42+oy, 5, 3, 2, "#ffd400");
-      rect(Cx-20+ox, Cy-26+oy, 40, 46, "#ffb6c1");
-    }
-
-    // Central student
-    rect(Cx-18, Cy-72, 36, 30, "#f2c5a0");     // head
-    rect(Cx-18, Cy-72, 36, 6, "#3a2d28");      // hair
-    rect(Cx-10, Cy-68, 8, 4, "#3a2d28");
-    rect(Cx-8,  Cy-60, 6, 6, "#111");          // eyes
-    rect(Cx+4,  Cy-60, 6, 6, "#111");
-    rect(Cx-1,  Cy-56, 2, 4, "#d9a98b");       // nose
-    rect(Cx-6,  Cy-49, 12, 3, "#b24b4b");      // smile
-    rect(Cx-22, Cy-42, 44, 54, "#7ec8e3");     // body
-
-    for (let i=-4;i<=4;i++){                   // hugging arms
-      const ox=i*36;
-      rect(Cx-52+ox, Cy-16, 32, 12, "#7ec8e3");
-      rect(Cx+20+ox, Cy-16, 32, 12, "#ffb6c1");
-    }
-
-    text("Path: Sleep + Social", W/2, 24, 18, "#111");
+    // central student joy + phone notifications
+    rect(Cx-18, H/2-72, 36, 30, "#f2c5a0");
+    rect(Cx-18, H/2-72, 36, 6, "#3a2d28"); rect(Cx-10, H/2-68, 8, 4, "#3a2d28");
+    rect(Cx-6,  H/2-60, 6, 6, "#111"); rect(Cx+4,  H/2-60, 6, 6, "#111");
+    rect(Cx-6,  H/2-50, 12, 3, "#b24b4b");
+    rect(Cx-22, H/2-42, 44, 54, "#7ec8e3");
+    // phone bubble
+    rect(Cx+30, H/2-84, 28, 18, "#fff"); outline(Cx+30, H/2-84, 28, 18, "#111",1);
+    text((tNow/800|0)%2?"DM!":"Event", Cx+44, H/2-84, 9, "#111");
+    text("Path: Sleep + Social", W/2, 24, 18, "#a5e1ff");
+    updateParticles(dt);
   }
 
   // ===== Loop =====
-  let last=performance.now();
   function frame(now){
-    const dt=Math.min(60,now-last); last=now;
-    rect(0,0,W,H,"#ffffff");
+    const dt=Math.min(60,now-last); last=now; tNow=now;
     if(scene===1) drawScene1(dt);
-    else if(scene===2) drawScene2();
+    else if(scene===2) drawScene2(dt);
     else if(scene===3) drawScene3(dt);
     else if(scene===4) drawScene4(dt);
     else if(scene===5) drawScene5(dt);
